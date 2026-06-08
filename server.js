@@ -6,6 +6,7 @@ const PORT = Number(process.env.PORT || 8080);
 const HOST = '0.0.0.0';
 const INDEX_PATH = path.join(__dirname, 'web', 'index.html');
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const METHODS_WITH_BODY = new Set(['POST', 'PUT', 'PATCH']);
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024; // 2MB limit for incoming proxy payloads.
 const OUTBOUND_REQUEST_TIMEOUT_MS = 15000;
 const BLOCKED_HEADER_NAMES = new Set([
@@ -123,7 +124,7 @@ async function handleProxy(req, res) {
   };
 
   const hasBody = parsed.body !== null && parsed.body !== undefined && parsed.body !== '';
-  if (method !== 'GET' && hasBody) {
+  if (METHODS_WITH_BODY.has(method) && hasBody) {
     fetchOptions.body = typeof parsed.body === 'string' ? parsed.body : JSON.stringify(parsed.body);
   }
 
@@ -192,5 +193,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Watchtower API Made Easy listening on http://${HOST}:${PORT}`);
+  console.log(`Watchtower API Made Easy listening on http://localhost:${PORT}`);
 });
