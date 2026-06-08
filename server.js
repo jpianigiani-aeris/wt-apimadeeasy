@@ -122,7 +122,8 @@ async function handleProxy(req, res) {
     headers: outgoingHeaders
   };
 
-  if (method !== 'GET' && parsed.body !== undefined && parsed.body !== null && parsed.body !== '') {
+  const hasBody = parsed.body !== null && parsed.body !== undefined && parsed.body !== '';
+  if (method !== 'GET' && hasBody) {
     fetchOptions.body = typeof parsed.body === 'string' ? parsed.body : JSON.stringify(parsed.body);
   }
 
@@ -191,5 +192,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`wt-apimadeeasy listening on http://${HOST}:${PORT}`);
+  console.log(`Watchtower API Made Easy listening on http://${HOST}:${PORT}`);
 });
