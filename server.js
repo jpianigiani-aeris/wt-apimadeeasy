@@ -6,7 +6,8 @@ const PORT = Number(process.env.PORT || 8080);
 const HOST = '0.0.0.0';
 const INDEX_PATH = path.join(__dirname, 'web', 'index.html');
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024; // 2MB limit for incoming proxy payloads.
+const OUTBOUND_REQUEST_TIMEOUT_MS = 15000;
 const BLOCKED_HEADER_NAMES = new Set([
   'connection',
   'content-length',
@@ -19,6 +20,7 @@ const BLOCKED_HEADER_NAMES = new Set([
   'transfer-encoding',
   'upgrade'
 ]);
+const CACHED_INDEX_HTML = fs.readFileSync(INDEX_PATH, 'utf-8');
 
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -125,7 +127,14 @@ async function handleProxy(req, res) {
   }
 
   try {
-    const response = await fetch(target, fetchOptions);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OUTBOUND_REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(target, { ...fetchOptions, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     const text = await response.text();
     const responseHeaders = Object.fromEntries(response.headers.entries());
 
@@ -146,6 +155,11 @@ async function handleProxy(req, res) {
       body
     });
   } catch (error) {
+    if (error.name === 'AbortError') {
+      return sendJson(res, 504, {
+        error: 'Target endpoint timed out'
+      });
+    }
     return sendJson(res, 502, {
       error: 'Unable to reach target endpoint',
       details: error.message
@@ -164,9 +178,8 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/') {
     try {
-      const html = fs.readFileSync(INDEX_PATH, 'utf-8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(html);
+      return res.end(CACHED_INDEX_HTML);
     } catch {
       res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       return res.end('Unable to load UI');
