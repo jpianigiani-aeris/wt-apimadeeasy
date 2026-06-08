@@ -6,23 +6,58 @@ const PORT = Number(process.env.PORT || 8080);
 const HOST = '0.0.0.0';
 const INDEX_PATH = path.join(__dirname, 'web', 'index.html');
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+const BLOCKED_HEADER_NAMES = new Set([
+  'connection',
+  'content-length',
+  'host',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade'
+]);
 
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 }
 
-function parseBody(req) {
+function parseBody(req, res) {
   return new Promise((resolve, reject) => {
     let data = '';
+    let totalBytes = 0;
+    let settled = false;
     req.on('data', (chunk) => {
-      data += chunk;
-      if (data.length > 2 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
+      if (settled) {
+        return;
       }
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        settled = true;
+        sendJson(res, 413, { error: 'Request body too large' });
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      data += chunk;
     });
-    req.on('end', () => resolve(data));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(data);
+    });
+    req.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
   });
 }
 
@@ -32,10 +67,29 @@ function joinUrl(baseUrl, endpoint) {
   return `${normalizedBase}/${normalizedPath}`;
 }
 
+function sanitizeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') {
+    return {};
+  }
+
+  const safeHeaders = {};
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    const name = String(rawName || '').trim().toLowerCase();
+    if (!name || BLOCKED_HEADER_NAMES.has(name)) {
+      continue;
+    }
+    safeHeaders[name] = String(rawValue);
+  }
+  return safeHeaders;
+}
+
 async function handleProxy(req, res) {
   let parsed;
   try {
-    const raw = await parseBody(req);
+    const raw = await parseBody(req, res);
+    if (raw === null) {
+      return;
+    }
     parsed = JSON.parse(raw || '{}');
   } catch (error) {
     return sendJson(res, 400, { error: 'Invalid JSON payload' });
@@ -60,7 +114,7 @@ async function handleProxy(req, res) {
     return sendJson(res, 400, { error: 'Only http and https are supported' });
   }
 
-  const outgoingHeaders = parsed.headers && typeof parsed.headers === 'object' ? parsed.headers : {};
+  const outgoingHeaders = sanitizeHeaders(parsed.headers);
   const fetchOptions = {
     method,
     headers: outgoingHeaders
